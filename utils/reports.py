@@ -34,6 +34,13 @@ def scientific_report(result, comparisons=None):
                       'designs are not directly comparable.', '', '```csv', comparisons.to_csv(index=False), '```'])
     else:
         lines.append('No additional candidate comparison was included in this report.')
+    if result.get('colab_metadata'):
+        lines.extend(['', '## Colab fraud methodology and class counts', '', '```json',
+                      dumps(result['colab_metadata']), '```', '',
+                      '## Validation candidate and threshold selection (not final test scores)', '', '```json',
+                      dumps({'candidates': result.get('validation_comparison', []),
+                             'operating_point': result.get('validation_metrics', {}),
+                             'frozen_threshold': result.get('threshold')}), '```'])
     lines.extend(['', '## Limitations', '',
                   'Single-session results are exploratory and do not establish causal or universal model superiority. '
                   'Repeated comparison on the same holdout may influence subsequent choices; reserve an independent '

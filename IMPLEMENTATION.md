@@ -63,3 +63,17 @@ The starter repository contained `app.py`, an unpinned analytics dependency list
 **Environment:** isolated Python 3.11.18 at `/workspace/.cloud-env/ML-Analytics/venv`; helper scripts, caches and validation outputs remain outside the checkout. Installation uses the existing GitHub/package-manager network access and requires no secrets. Environment installation and startup instructions are saved separately in environment settings for review/publication.
 
 **Remaining external steps:** review the code changes, commit/push them when appropriate, and deploy `app.py` with Python 3.11 in Streamlit Community Cloud. This work validates the current cloud instance; it does not claim a GitHub push, Community Cloud deployment, environment publication, or fresh-task snapshot restoration. Review/save the environment draft and publish it through the product to reuse the prepared snapshot.
+
+## Credit-card fraud and large-dataset Colab update
+
+The user confirmed the standard creditcard.csv schema (`Class=0/1`, `Time`, `Amount`, `V1`–`V28`). Added a fraud-specific workflow, explicit dataset preset and operating-point scorecards while preserving the general tools and Streamlit entry point.
+
+**Created:** `core/fraud.py`, `views/fraud_page.py`, `examples/creditcard_colab.py`, `examples/build_fraud_notebook.py`, the self-contained `examples/credit_card_fraud_colab.ipynb`, `docs/CREDIT_CARD_FRAUD_COLAB.md`, and `tests/test_fraud_colab.py`.
+
+**Modified:** `app.py`, `core/artifacts.py`, `core/evaluation.py`, `views/data_pages.py`, `views/model_pages.py`, `views/exchange_pages.py`, `utils/reports.py`, `tests/test_artifacts.py`, `README.md`, and this record.
+
+**Behavior:** the full CSV can stay in Google Drive. Batch Colab training compares ANN/MLP, Random Forest and a baseline by validation average precision, selects a validation F2 operating point under an explicit precision floor, then tests only the selected candidate. The lower-memory mode reads every training row in chunks using SGD logistic and a frozen training-only scaler. Chronological boundaries keep equal timestamps together. Compact JSON imports preserve fraud label, threshold, validation comparison and bounded ROC/PR curves, without transaction features or executable model loading. Confusion metrics use weighted class pairs, so large test counts are not expanded into rows.
+
+**Validation:** 81 automated tests pass, including 12 new cases for full-row batch/chunked training, train-only preprocessing, separate validation/test accesses, ANN/RF comparison, schema/order/memory/threshold failures, large-count imports, notebook-source consistency, bounded curve export round-trips, preset application, and a complete imported fraud dashboard without any uploaded source CSV.
+
+**Limits:** actual user data was not supplied or trained. Colab execution/authentication must be performed by the user; trainer and generated notebook code are tested in the prepared Python environment using synthetic data. Incremental mode is SGD logistic rather than ANN/RF, needs a Time-sorted CSV, uses fixed zero imputation, and bounds evaluation arrays. Colab remains subject to finite RAM/CPU/session limits; no automatic checkpoint/resume is implemented. Imported results retain an unverified external split identity. The local app's prototype training uses stratified CV; the notebook defaults to chronological validation.

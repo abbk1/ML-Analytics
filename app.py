@@ -9,8 +9,9 @@ from views.data_pages import dataset_page, eda_page, preprocessing_page, imbalan
 from views.model_pages import (dashboard, model_configuration, training_page, evaluation_page,
                                comparison_page, error_page, prediction_page)
 from views.exchange_pages import history_page, import_page, export_page, help_page
+from views.fraud_page import fraud_page
 
-PAGES = ['Dashboard', 'Dataset Management', 'Exploratory Data Analysis', 'Data Preprocessing',
+PAGES = ['Dashboard', 'Credit Card Fraud & Colab', 'Dataset Management', 'Exploratory Data Analysis', 'Data Preprocessing',
          'Class Imbalance Analysis', 'Model Configuration', 'Model Training', 'Performance Evaluation',
          'Model Comparison', 'Error Analysis', 'Prediction', 'Experiment History', 'Import Colab Results',
          'Export and Reports', 'Help and Documentation']
@@ -27,7 +28,7 @@ def current_config():
 
 
 def main():
-    st.set_page_config(page_title='ML Analytics Studio', page_icon='📊', layout='wide', initial_sidebar_state='expanded')
+    st.set_page_config(page_title='Credit Card Fraud · ML Analytics Studio', page_icon='📊', layout='wide', initial_sidebar_state='expanded')
     initialize()
     defaults = {'prep_config': PreprocessingConfig(), 'resample_config': ResamplingConfig(),
                 'split_config': SplitConfig(), 'text_column': None, 'primary_metric': 'f1_macro',
@@ -37,8 +38,8 @@ def main():
         if key not in st.session_state:
             st.session_state[key] = value
     with st.sidebar:
-        st.title('ML Analytics Studio')
-        st.caption('CLASSIFICATION WORKSPACE')
+        st.title('Credit Card Fraud Studio')
+        st.caption('FRAUD DETECTION & COLAB WORKSPACE')
         st.selectbox('Configuration mode', ['Beginner', 'Advanced'], key='ui_mode')
         page = st.radio('Navigation', PAGES, key='navigation', label_visibility='collapsed')
         st.divider()
@@ -52,7 +53,7 @@ def main():
         fingerprint = hashlib.sha256((config.fingerprint() + json.dumps(st.session_state.model_settings, sort_keys=True)).encode()).hexdigest()
         invalidate_config(fingerprint)
     routes = {
-        'Dashboard': lambda: dashboard(config), 'Dataset Management': dataset_page,
+        'Dashboard': lambda: dashboard(config), 'Credit Card Fraud & Colab': fraud_page, 'Dataset Management': dataset_page,
         'Exploratory Data Analysis': eda_page, 'Data Preprocessing': lambda: preprocessing_page(config),
         'Class Imbalance Analysis': imbalance_page, 'Model Configuration': model_configuration,
         'Model Training': lambda: training_page(config), 'Performance Evaluation': evaluation_page,

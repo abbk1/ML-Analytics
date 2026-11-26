@@ -11,6 +11,7 @@ from core.data import load_dataset, audit_dataset, class_distribution, stratifie
 from core.resampling import METHODS
 from core.training import split_dataset
 from core.preprocessing import build_pipeline
+from core.fraud import is_creditcard_dataset, creditcard_preset
 from utils.session import replace_dataset
 from utils.charts import show, class_chart
 
@@ -24,6 +25,8 @@ def need_dataset():
 
 def dataset_page():
     st.header('Dataset Management')
+    st.info('Full creditcard.csv too large? Open Credit Card Fraud & Colab to train in Google Colab and import a small results JSON. '
+            'You do not need to upload the full CSV here.')
     st.caption('Upload, audit, and select your classification inputs. Cleaning always requires an explicit choice.')
     upload = st.file_uploader('CSV, TSV or Excel (.xlsx)', type=['csv', 'tsv', 'xlsx'], key='dataset_upload')
     if upload is not None and st.button('Load this dataset', type='primary'):
@@ -36,10 +39,20 @@ def dataset_page():
     if not need_dataset():
         return
     frame = st.session_state.dataset
+    if is_creditcard_dataset(frame):
+        st.success('Credit-card schema detected: Class is the target; 1 = fraud and 0 = legitimate.')
+        if st.button('Apply credit-card fraud preset', type='primary'):
+            try:
+                st.session_state.update(creditcard_preset(frame))
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+        st.caption('Preset: average-precision ranking, positive Class=1, StandardScaler, 3-fold CV, '
+                   'class-weighted Random Forest/logistic regression and a Dummy baseline; no resampling or data removal.')
     st.subheader(st.session_state.dataset_name)
     st.dataframe(frame.head(100), width='stretch')
     st.caption(f'Preview shows up to 100 of {len(frame):,} rows. Training uses the selected full dataset unless you explicitly sample below.')
-    target_default = st.session_state.target or frame.columns[-1]
+    target_default = st.session_state.target or ('Class' if is_creditcard_dataset(frame) else frame.columns[-1])
     with st.form('dataset_selection'):
         target = st.selectbox('Target column', frame.columns, index=list(frame.columns).index(target_default))
         task = st.selectbox('Classification task', ['Tabular', 'Mixed', 'Text'],

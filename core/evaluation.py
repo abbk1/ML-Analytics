@@ -21,23 +21,25 @@ def positive_scores(response, classes, positive):
     return response[:, index]
 
 
-def evaluate_predictions(y_true, y_pred, classes, response=None, response_kind='unavailable', positive=None):
+def evaluate_predictions(y_true, y_pred, classes, response=None, response_kind='unavailable', positive=None,
+                         sample_weight=None):
     classes = list(classes)
     positive = positive or classes[-1]
-    values = {'accuracy': metrics.accuracy_score(y_true, y_pred),
-              'balanced_accuracy': metrics.balanced_accuracy_score(y_true, y_pred),
-              'error_rate': 1 - metrics.accuracy_score(y_true, y_pred),
-              'mcc': metrics.matthews_corrcoef(y_true, y_pred),
-              'cohen_kappa': metrics.cohen_kappa_score(y_true, y_pred)}
+    weights = {'sample_weight': sample_weight}
+    values = {'accuracy': metrics.accuracy_score(y_true, y_pred, **weights),
+              'balanced_accuracy': metrics.balanced_accuracy_score(y_true, y_pred, **weights),
+              'error_rate': 1 - metrics.accuracy_score(y_true, y_pred, **weights),
+              'mcc': metrics.matthews_corrcoef(y_true, y_pred, **weights),
+              'cohen_kappa': metrics.cohen_kappa_score(y_true, y_pred, **weights)}
     for average in ('macro', 'weighted', 'micro'):
         for name, function in [('precision', metrics.precision_score), ('recall', metrics.recall_score),
                                ('f1', metrics.f1_score)]:
-            values[f'{name}_{average}'] = function(y_true, y_pred, labels=classes, average=average, zero_division=0)
+            values[f'{name}_{average}'] = function(y_true, y_pred, labels=classes, average=average, zero_division=0, **weights)
     precision, recall, f1, support = metrics.precision_recall_fscore_support(
-        y_true, y_pred, labels=classes, zero_division=0)
+        y_true, y_pred, labels=classes, zero_division=0, **weights)
     report = pd.DataFrame({'precision': precision, 'recall': recall, 'f1-score': f1,
                            'support': support}, index=classes)
-    matrix = metrics.confusion_matrix(y_true, y_pred, labels=classes)
+    matrix = metrics.confusion_matrix(y_true, y_pred, labels=classes, **weights)
     tp = matrix.diagonal()
     fn = matrix.sum(axis=1) - tp
     fp = matrix.sum(axis=0) - tp

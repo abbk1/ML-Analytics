@@ -30,15 +30,29 @@ def dumps(value):
     return json.dumps(value, default=json_default, indent=2, allow_nan=False)
 
 
+def compact_curves(curves, limit=1000):
+    """Bound chart payloads while leaving metrics computed from all responses intact."""
+    output = {}
+    for label, curve in curves.items():
+        output[label] = {}
+        for x, y in [('fpr', 'tpr'), ('recall', 'precision')]:
+            indices = np.unique(np.linspace(0, len(curve[x]) - 1, min(len(curve[x]), limit), dtype=int))
+            output[label][x] = np.asarray(curve[x])[indices].tolist()
+            output[label][y] = np.asarray(curve[y])[indices].tolist()
+    return output
+
+
 def metadata(result):
     keys = ['id', 'batch_id', 'source', 'timestamp', 'model_name', 'experiment_name', 'config',
             'model_parameters', 'dataset_name', 'dataset_fingerprint', 'dataset_shape', 'split_id',
             'train_indices', 'test_indices', 'classes', 'positive_class', 'minority_class',
             'cv_scores', 'cv_mean', 'cv_std', 'fit_seconds', 'total_seconds', 'threshold',
-            'resampled_delta', 'generated_rows', 'removed_rows', 'warnings', 'versions']
+            'resampled_delta', 'generated_rows', 'removed_rows', 'warnings', 'versions',
+            'validation_metrics', 'validation_comparison', 'colab_metadata']
     output = {key: result[key] for key in keys if key in result}
     output['metrics'] = result['evaluation']['metrics']
     output['confusion_matrix'] = result['evaluation'].get('confusion_matrix')
+    output['curves'] = compact_curves(result['evaluation'].get('curves', {}))
     return output
 
 
@@ -96,8 +110,8 @@ def validate_matrix(matrix, classes):
         raise ValueError('Confusion matrix shape must match the ordered classes.')
     if not np.isfinite(values).all() or (values < 0).any() or not np.equal(values, np.floor(values)).all():
         raise ValueError('Confusion matrix counts must be finite nonnegative integers.')
-    if values.sum() < 1 or values.sum() > 500000:
-        raise ValueError('Confusion matrix total must be between 1 and 500,000.')
+    if values.sum() < 1 or values.sum() > 1e12:
+        raise ValueError('Confusion matrix total must be between 1 and one trillion.')
     return values.astype(int), classes
 
 
@@ -120,25 +134,66 @@ def imported_result(item, evaluation=None):
     if evaluation is None:
         evaluation = {'metrics': validate_metrics(item.get('metrics', {})), 'per_class': pd.DataFrame(),
                       'confusion_matrix': None, 'curves': {}, 'unavailable': {}, 'response_kind': 'unavailable'}
+    classes = item.get('classes') or []
+    positive = str(item.get('positive_class', classes[-1] if classes else ''))
+    threshold = item.get('threshold')
+    if threshold is not None and (isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not math.isfinite(threshold)):
+        raise ValueError('Threshold must be finite and numeric.')
+    validation = item.get('validation_metrics', {})
+    comparison = item.get('validation_comparison', [])
+    if not isinstance(validation, dict) or any(not isinstance(v, (int, float)) or not math.isfinite(v) for v in validation.values()):
+        raise ValueError('Validation metrics must be a finite numeric object.')
+    if not isinstance(comparison, list) or len(comparison) > 20:
+        raise ValueError('Validation comparison must contain at most 20 candidates.')
+    for candidate in comparison:
+        if not isinstance(candidate, dict) or not isinstance(candidate.get('model'), str):
+            raise ValueError('Validation comparison needs named candidates.')
+        ap = candidate.get('validation_average_precision')
+        if not isinstance(ap, (int, float)) or not math.isfinite(ap) or not 0 <= ap <= 1:
+            raise ValueError('Validation average precision must be in [0,1].')
     return {'id': uuid.uuid4().hex[:12], 'model_name': name, 'experiment_name': str(item.get('experiment_name', 'Colab import'))[:120],
             'source': 'Imported · unverified external evaluation', 'timestamp': datetime.now(timezone.utc).isoformat(),
             # Imported split claims cannot establish equality with locally held-out observations.
             'split_id': 'external-' + uuid.uuid4().hex[:8], 'classes': item.get('classes', []),
+            'positive_class': positive, 'threshold': threshold,
+            'validation_metrics': validation, 'validation_comparison': comparison,
+            'colab_metadata': item.get('colab_metadata', {}),
             'config': config,
             'evaluation': evaluation, 'pipeline': None, 'warnings': ['External methodology and split identity are not independently verified.'],
             'versions': item.get('versions', {}), 'dataset_fingerprint': item.get('dataset_fingerprint', 'unknown')}
 
 
-def matrix_evaluation(matrix, classes):
+def matrix_evaluation(matrix, classes, positive=None):
     matrix, classes = validate_matrix(matrix, classes)
-    # Input is bounded above. Evaluate counts with the same authoritative metric implementation.
-    actual, predicted = [], []
+    # At most classes² weighted pairs, independent of the number of transactions.
+    actual, predicted, weights = [], [], []
     for i, actual_label in enumerate(classes):
         for j, predicted_label in enumerate(classes):
             count = int(matrix[i, j])
-            actual.extend([actual_label] * count)
-            predicted.extend([predicted_label] * count)
-    return evaluate_predictions(actual, predicted, classes)
+            if count:
+                actual.append(actual_label)
+                predicted.append(predicted_label)
+                weights.append(count)
+    return evaluate_predictions(actual, predicted, classes, positive=positive, sample_weight=weights)
+
+
+def validate_curves(document, classes):
+    if not isinstance(document, dict) or set(document) - set(classes):
+        raise ValueError('Curve keys must be ordered class labels.')
+    curves = {}
+    for label, curve in document.items():
+        if not isinstance(curve, dict) or set(curve) != {'fpr', 'tpr', 'precision', 'recall'}:
+            raise ValueError('Each curve needs fpr, tpr, precision, recall arrays.')
+        arrays = {key: np.asarray(value, dtype=float) for key, value in curve.items()}
+        if any(a.ndim != 1 or not 2 <= len(a) <= 1000 or not np.isfinite(a).all()
+               or (a < 0).any() or (a > 1).any() for a in arrays.values()):
+            raise ValueError('Curves require 2–1,000 finite values in [0, 1].')
+        if len(arrays['fpr']) != len(arrays['tpr']) or len(arrays['precision']) != len(arrays['recall']):
+            raise ValueError('Curve coordinate lengths must match.')
+        if (np.diff(arrays['fpr']) < 0).any() or (np.diff(arrays['recall']) > 0).any():
+            raise ValueError('ROC FPR must increase and PR recall must decrease.')
+        curves[label] = arrays
+    return curves
 
 
 def import_results(content, filename, kind='Metrics table'):
@@ -188,13 +243,21 @@ def import_results(content, filename, kind='Metrics table'):
             raise ValueError('Every experiment must be an object.')
         if item.get('confusion_matrix') is not None:
             _, item['classes'] = validate_matrix(item['confusion_matrix'], item.get('classes'))
-            evaluated = matrix_evaluation(item['confusion_matrix'], item.get('classes'))
+            positive = str(item.get('positive_class', item['classes'][-1]))
+            if positive not in item['classes']:
+                raise ValueError('Positive class must be one of the supplied classes.')
+            evaluated = matrix_evaluation(item['confusion_matrix'], item.get('classes'), positive)
             if 'metrics' in item:
                 supplied = validate_metrics(item['metrics'])
                 for key in set(supplied) & set(evaluated['metrics']):
                     if not np.isclose(supplied[key], evaluated['metrics'][key], atol=1e-6):
                         raise ValueError(f'Supplied {key} disagrees with the confusion matrix.')
                 evaluated['metrics'].update(supplied)
+                for key in supplied:
+                    evaluated['unavailable'].pop(key, None)
+            evaluated['curves'] = validate_curves(item.get('curves', {}), item['classes'])
+            if evaluated['curves']:
+                evaluated['response_kind'] = 'external continuous responses (unverified)'
             results.append(imported_result(item, evaluated))
         else:
             results.append(imported_result(item))

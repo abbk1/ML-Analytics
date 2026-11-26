@@ -30,8 +30,17 @@ def choose_result(trained_only=False):
 
 def dashboard(config):
     st.header('ML Analytics Studio')
-    st.write('A reproducible workspace for classification, minority-class analysis, and fair model comparison. '
-             'Upload your data, prepare training-only transformations, and evaluate on an untouched holdout.')
+    st.subheader('Credit card fraud detection')
+    st.write('Focus on fraud recall, missed fraud, false alerts and precision–recall performance. '
+             'Train your full creditcard.csv in Colab and import compact results here; use local training for small prototypes.')
+    st.button('Start full-dataset fraud training with Colab', on_click=lambda:
+              st.session_state.update(navigation='Credit Card Fraud & Colab'), type='primary')
+    if st.session_state.history:
+        latest = st.session_state.history[-1]
+        if latest.get('positive_class') in ('1', '1.0') and set(latest.get('classes', [])) in ({'0', '1'}, {'0.0', '1.0'}):
+            from views.fraud_page import fraud_scorecard
+            st.subheader('Latest fraud experiment · test results')
+            fraud_scorecard(latest)
     frame = st.session_state.dataset
     if frame is None:
         st.info('Your workspace is empty. Upload a CSV, TSV or Excel classification dataset to start. No example results are fabricated.')
@@ -102,6 +111,12 @@ def training_page(config):
     st.header('Model Training')
     if config is None:
         st.info('Load a dataset and apply target/features in Dataset Management first.')
+        return
+    if len(st.session_state.dataset) > config.max_rows:
+        st.warning(f'This dataset has {len(st.session_state.dataset):,} rows; local training is limited to {config.max_rows:,}. '
+                   'Train the full CSV in Colab and import fraud_results.json, or explicitly create a small prototype sample.')
+        st.button('Open full-dataset Colab workflow', on_click=lambda:
+                  st.session_state.update(navigation='Credit Card Fraud & Colab'), type='primary')
         return
     if st.session_state.dataset[config.target].dropna().nunique() < 2:
         st.error('Choose a target containing at least two nonmissing classes before training.')
@@ -188,6 +203,10 @@ def evaluation_page():
         return
     evaluated = result['evaluation']
     metrics = evaluated['metrics']
+    if result.get('positive_class') in ('1', '1.0') and set(result.get('classes', [])) in ({'0', '1'}, {'0.0', '1.0'}):
+        from views.fraud_page import fraud_scorecard
+        st.subheader('Fraud detection operating point')
+        fraud_scorecard(result)
     cols = st.columns(3)
     for column, key in zip(cols, ['accuracy', 'balanced_accuracy', 'f1_macro']):
         column.metric(key.replace('_', ' ').title(), f'{metrics[key]:.3f}' if key in metrics else 'Not applicable')

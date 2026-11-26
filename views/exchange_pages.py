@@ -40,6 +40,11 @@ def history_page():
 
 def import_page():
     st.header('Import Colab Results')
+    st.subheader('Full credit-card fraud dataset')
+    st.write('Train creditcard.csv in Google Colab, then upload fraud_results.json below. The full transaction dataset stays in Drive. '
+             'The JSON contains final test metrics and validation-only candidate comparison, with Class=1 as fraud.')
+    from views.fraud_page import colab_downloads
+    colab_downloads()
     st.write('Import metric CSV tables, prediction CSVs, JSON experiment metadata, or JSON confusion matrices. '
              'Imported evaluations are labeled external and their split equivalence is unverified.')
     st.code('Metrics CSV: model,accuracy,balanced_accuracy,f1_macro\nPredictions CSV: actual,predicted\nConfusion JSON: {"model_name":"Colab model","classes":["no","yes"],"confusion_matrix":[[20,2],[3,5]]}', language='text')
@@ -126,6 +131,8 @@ def export_page():
 
 def help_page():
     st.header('Help and Documentation')
+    st.info('For full creditcard.csv training, open Credit Card Fraud & Colab. Use Class=1 as fraud, train in Colab, '
+            'and import fraud_results.json here. Small local experiments can use the explicit fraud preset in Dataset Management.')
     st.markdown('''
 ### A reproducible workflow
 1. **Dataset Management**: upload CSV, TSV or .xlsx, audit warnings, and apply a target and feature selection.

@@ -1,10 +1,17 @@
-# ML Analytics Studio
+# ML Analytics Studio — Credit Card Fraud
 
-A server-side, no-code classification workspace for Streamlit Community Cloud. Upload a tabular or text dataset, audit it, configure fold-local preprocessing and imbalance handling, train classifiers, inspect minority-class performance, predict, and export a reproducible experiment record. No local Python installation is needed to use a deployed app.
+A server-side classification workspace focused on **credit-card fraud detection**. For your full standard `creditcard.csv` (`Class=0` legitimate, `Class=1` fraud), train in **Google Colab** and import a small results JSON into Streamlit. For small prototypes, use the app's credit-card preset, training-only preprocessing and class-weighted models. The existing general tabular/text tools remain available.
+
+**Dataset too large for Streamlit?** [Open the fraud Colab notebook](https://colab.research.google.com/github/abbk1/ML-Analytics/blob/main/examples/credit_card_fraud_colab.ipynb) and follow the [step-by-step guide](docs/CREDIT_CARD_FRAUD_COLAB.md). Put the CSV in Drive → train/validate in Colab → import only `fraud_results.json` in the app. No local Python installation or full-dataset Streamlit upload is required.
+
+The notebook compares **ANN/MLP and Random Forest** when the full file fits Colab RAM. Its separate **incremental SGD logistic** mode reads a Time-sorted CSV in chunks when it does not fit; that mode uses a different lightweight model family. Both keep validation/test data out of fitted preprocessing and threshold/model fitting. Colab capacity is finite, and a GPU does not accelerate these scikit-learn models.
 
 ## Features
 
-The sidebar contains Dashboard, Dataset Management, Exploratory Data Analysis, Data Preprocessing, Class Imbalance Analysis, Model Configuration, Model Training, Performance Evaluation, Model Comparison, Error Analysis, Prediction, Experiment History, Import Colab Results, Export and Reports, and Help and Documentation.
+The sidebar contains Dashboard, Credit Card Fraud & Colab, Dataset Management, Exploratory Data Analysis, Data Preprocessing, Class Imbalance Analysis, Model Configuration, Model Training, Performance Evaluation, Model Comparison, Error Analysis, Prediction, Experiment History, Import Colab Results, Export and Reports, and Help and Documentation.
+
+- Fraud-specific setup for `Class=1`, average-precision ranking and class weighting; scorecards show fraud detected/missed, legitimate transactions flagged/cleared, fraud recall and false alarm rate.
+- A self-contained Colab notebook with batch ANN/Random Forest comparison or chunked incremental training, chronological train/validation/test separation, validation-only F2 threshold selection, compact report/curve imports and trusted models kept in Drive.
 
 - CSV, TSV and Excel `.xlsx` loading with bounded uploads, previews, types, missing values, duplicates, unique counts, memory estimates, target/features, identifier/leakage/rare-class warnings and explicit stratified sampling.
 - Numerical/categorical EDA, correlations, outliers, missingness, class distributions, and text lengths, word counts, vocabulary and frequent words. Charts explicitly sample up to 5,000 rows; training is never silently sampled.

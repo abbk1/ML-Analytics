@@ -53,3 +53,18 @@ def test_excel_and_csv_formula_safety():
 def test_import_rejects_malformed_configuration():
     with pytest.raises(ValueError, match='config.preprocessing'):
         import_results(b'{"model_name":"bad","metrics":{"accuracy":0.5},"config":{"preprocessing":"invalid"}}', 'bad.json')
+
+
+def test_export_large_response_curves_still_roundtrips():
+    import numpy as np
+    from core.evaluation import evaluate_predictions
+    scores = np.linspace(0, 1, 1500)
+    actual = np.where(np.arange(1500) % 2, '1', '0')
+    predicted = np.where(scores >= 0.5, '1', '0')
+    evaluated = evaluate_predictions(actual, predicted, ['0', '1'], np.column_stack((1 - scores, scores)), 'probability', '1')
+    assert len(evaluated['curves']['1']['recall']) > 1000
+    original = {'id': 'unit-test', 'source': 'Synthetic unit test', 'model_name': 'Score example',
+                'classes': ['0', '1'], 'positive_class': '1', 'evaluation': evaluated}
+    result = import_results(export_experiments([original]).encode(), 'results.json')[0]
+    assert len(result['evaluation']['curves']['1']['recall']) == 1000
+    assert result['evaluation']['metrics']['average_precision'] == evaluated['metrics']['average_precision']
