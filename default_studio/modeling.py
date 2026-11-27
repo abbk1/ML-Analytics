@@ -18,16 +18,9 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler, FunctionTransfo
 from sklearn.utils.class_weight import compute_sample_weight
 from threadpoolctl import threadpool_limits
 from default_studio.data import FEATURES, TARGET, NUMERICAL, CATEGORICAL, validate_record
+from default_studio.parameters import TrainingParameters, SEED
 
-SEED = 42
 MODEL_NAMES = ('Random Forest', 'ANN')
-FOREST_PARAMETERS = {'n_estimators': 80, 'max_depth': 8, 'min_samples_leaf': 15,
-                     'max_features': 'sqrt', 'class_weight': 'balanced_subsample', 'n_jobs': 1, 'random_state': SEED}
-ANN_PARAMETERS = {'hidden_layer_sizes': (32,), 'activation': 'relu', 'solver': 'adam',
-                  'alpha': 0.01, 'batch_size': 256, 'learning_rate_init': 0.001,
-                  'random_state': SEED, 'max_iter': 1, 'shuffle': True}
-ANN_MAX_EPOCHS = 80
-ANN_PATIENCE = 8
 
 
 def preprocessor(scale=False):
@@ -63,35 +56,36 @@ def _evaluate(y, probabilities):
             'predictions': predictions, 'probabilities': probabilities}
 
 
-def fit_ann(X, y, progress=None, max_epochs=ANN_MAX_EPOCHS):
+def fit_ann(X, y, progress=None, parameters=None):
     """Preprocessing sees only ANN fit rows, excluding early-stop validation and test.
 
     An explicit inner 90/10 split avoids fitting a scaler before sklearn's hidden
     early-stopping split. The held-out 6,000 rows are never passed here.
     """
+    parameters = (parameters or TrainingParameters()).validate()
     fit_rows, stop_rows = train_test_split(np.arange(len(y)), test_size=0.1,
                                           stratify=y, random_state=SEED)
     prepare = preprocessor(scale=True)
     X_fit = prepare.fit_transform(X.iloc[fit_rows], y.iloc[fit_rows])
     X_stop = prepare.transform(X.iloc[stop_rows])
-    model = MLPClassifier(**ANN_PARAMETERS)
-    fit_weights = compute_sample_weight('balanced', y.iloc[fit_rows]).astype(np.float32)
-    stop_weights = compute_sample_weight('balanced', y.iloc[stop_rows])
+    model = MLPClassifier(**parameters.ann_parameters())
+    fit_weights = compute_sample_weight('balanced', y.iloc[fit_rows]).astype(np.float32) if parameters.balance_classes else None
+    stop_weights = compute_sample_weight('balanced', y.iloc[stop_rows]) if parameters.balance_classes else None
     best_model, best_loss, stale, losses = None, np.inf, 0, []
     with threadpool_limits(limits=1):
-        for epoch in range(1, max_epochs + 1):
+        for epoch in range(1, parameters.ann_epochs + 1):
             model.partial_fit(X_fit, y.iloc[fit_rows], classes=np.array([0, 1]), sample_weight=fit_weights)
             loss = float(log_loss(y.iloc[stop_rows], model.predict_proba(X_stop),
                                   labels=[0, 1], sample_weight=stop_weights))
             losses.append({'epoch': epoch, 'validation_log_loss': loss, 'training_loss': float(model.loss_)})
             if progress:
-                progress('ANN', f'Epoch {epoch}/{max_epochs} · validation loss {loss:.4f}')
+                progress('ANN', f'Epoch {epoch}/{parameters.ann_epochs} · validation loss {loss:.4f}')
             if loss < best_loss - 0.0001:
                 best_model, best_loss, stale = deepcopy(model), loss, 0
                 best_epoch = epoch
             else:
                 stale += 1
-            if stale >= ANN_PATIENCE:
+            if stale >= parameters.ann_patience:
                 break
     if best_model is None:
         raise ValueError('ANN failed to produce a finite validation loss.')
@@ -99,7 +93,8 @@ def fit_ann(X, y, progress=None, max_epochs=ANN_MAX_EPOCHS):
     return pipeline, pd.DataFrame(losses), fit_rows, stop_rows, best_epoch
 
 
-def train_models(frame, progress=None, ann_max_epochs=ANN_MAX_EPOCHS):
+def train_models(frame, progress=None, parameters=None):
+    parameters = (parameters or TrainingParameters()).validate()
     if len(frame) < 100 or set(frame[TARGET].unique()) != {0, 1}:
         raise ValueError('Training requires both classes and at least 100 customers.')
     X, y = frame.loc[:, FEATURES], frame[TARGET]
@@ -108,10 +103,10 @@ def train_models(frame, progress=None, ann_max_epochs=ANN_MAX_EPOCHS):
         raise ValueError('At least ten training examples per class are required.')
     started = time.perf_counter()
     if progress:
-        progress('Random Forest', 'Fitting 80 trees on the training partition…')
+        progress('Random Forest', f'Fitting {parameters.forest_trees} trees on the training partition…')
     model_started = time.perf_counter()
     forest = Pipeline([('prepare', preprocessor(scale=False)),
-                       ('model', RandomForestClassifier(**FOREST_PARAMETERS))])
+                       ('model', RandomForestClassifier(**parameters.forest_parameters()))])
     with threadpool_limits(limits=1):
         forest.fit(X.iloc[train], y.iloc[train])
     forest_seconds = time.perf_counter() - model_started
@@ -119,7 +114,7 @@ def train_models(frame, progress=None, ann_max_epochs=ANN_MAX_EPOCHS):
         progress('ANN', 'Fitting training-only preprocessing and preparing early stopping…')
     model_started = time.perf_counter()
     ann, loss_history, ann_fit, ann_stop, best_epoch = fit_ann(
-        X.iloc[train], y.iloc[train], progress, max_epochs=ann_max_epochs)
+        X.iloc[train], y.iloc[train], progress, parameters=parameters)
     ann_seconds = time.perf_counter() - model_started
     # Final evaluation occurs after both candidates and the ANN epoch count are fixed.
     results = {}
@@ -128,7 +123,10 @@ def train_models(frame, progress=None, ann_max_epochs=ANN_MAX_EPOCHS):
             probabilities = pipeline.predict_proba(X.iloc[test])[:, 1]
         results[name] = {'pipeline': pipeline, 'fit_seconds': seconds, **_evaluate(y.iloc[test], probabilities)}
     majority = int(y.iloc[train].value_counts().idxmax())
-    return {'models': results, 'train_indices': train, 'test_indices': test,
+    return {'models': results, 'parameters': parameters.to_dict(), 'parameter_fingerprint': parameters.fingerprint(),
+            'effective_parameters': {'Random Forest': forest.named_steps['model'].get_params(),
+                                     'ANN': ann.named_steps['model'].get_params()},
+            'train_indices': train, 'test_indices': test,
             'ann_fit_indices': train[ann_fit], 'ann_stop_indices': train[ann_stop],
             'test_customer_ids': frame.ID.iloc[test].to_numpy(), 'test_labels': y.iloc[test].to_numpy(),
             'ann_history': loss_history, 'ann_best_epoch': best_epoch,

@@ -1,16 +1,14 @@
 """Four small pages for one public dataset and two models."""
-from datetime import datetime, timezone
 import json
 import time
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from default_studio.data import (load_dataset, metadata, FEATURES, TARGET, MONTHS,
                                   PAYMENT_STATUS, BILLS, PAYMENTS, CLASS_LABELS)
-from default_studio.modeling import (train_models, comparison_table, predict_record,
-    FOREST_PARAMETERS, ANN_PARAMETERS, ANN_MAX_EPOCHS, ANN_PATIENCE, SEED)
+from default_studio.modeling import train_models, comparison_table, predict_record
+from default_studio.parameters import TrainingParameters, SEED
 
 PAGES = ('Dataset', 'Train', 'Compare', 'Predict')
 COLORS = {'Random Forest': '#2563eb', 'ANN': '#0d9488'}
@@ -88,46 +86,117 @@ def dataset_page(frame):
         st.caption('Historical demographic features and repayment data require bias, calibration and drift assessment before any real-world use.')
 
 
+def apply_training_parameters(parameters):
+    """Commit settings and invalidate fitted/predicted state only when they change."""
+    parameters.validate()
+    changed = parameters.to_dict() != st.session_state.training_parameters
+    st.session_state.training_parameters = parameters.to_dict()
+    if changed:
+        st.session_state.benchmark = None
+        st.session_state.pop('prediction', None)
+    return changed
+
+
+def reset_training_parameters():
+    st.session_state.training_parameters = TrainingParameters().to_dict()
+    st.session_state.benchmark = None
+    st.session_state.pop('prediction', None)
+    for key in list(st.session_state):
+        if key.startswith('training_input_'):
+            del st.session_state[key]
+
+
 def train_page(frame):
     st.title('Train two models.')
-    st.write('One click prepares both models on all 24,000 development records. Page changes and predictions reuse the fitted models in your session.')
-    left, right = st.columns(2)
-    with left.container(border=True):
-        st.subheader('Random Forest')
-        st.write('80 trees · maximum depth 8 · balanced class weights')
-        st.caption('Captures nonlinear patterns without numerical scaling. Runs with one worker.')
-    with right.container(border=True):
-        st.subheader('ANN')
-        st.write('One hidden layer · 32 neurons · up to 80 epochs')
-        st.caption('Uses scaled numerical inputs and balanced training weights. Early stopping restores the best validation checkpoint.')
-    st.info('Fixed 80/20 stratified split · random state 42 · 23 inputs · decision threshold 0.50')
+    st.write('Set the training parameters below, then train both models. Saving settings alone does not start training.')
+    if 'training_notice' in st.session_state:
+        st.success(st.session_state.pop('training_notice'))
+    parameters = TrainingParameters(**st.session_state.training_parameters)
+    st.info('Shared 80/20 stratified split · 24,000 development / 6,000 test records · random state 42 · decision threshold 0.50')
+    st.button('Reset parameters to defaults', on_click=reset_training_parameters)
+    with st.form('training_parameters_form'):
+        left, right = st.columns(2)
+        with left:
+            st.subheader('Random Forest')
+            trees = st.number_input('Number of trees', min_value=20, max_value=200, value=parameters.forest_trees,
+                                    step=20, key='training_input_trees')
+            depth = st.number_input('Maximum tree depth', min_value=2, max_value=12, value=parameters.forest_depth,
+                                    key='training_input_depth')
+            with st.expander('More forest settings'):
+                min_leaf = st.number_input('Minimum samples per leaf', min_value=1, max_value=50,
+                                           value=parameters.forest_min_leaf, key='training_input_leaf')
+                min_split = st.number_input('Minimum samples to split', min_value=2, max_value=20,
+                                            value=parameters.forest_min_split, key='training_input_split')
+                max_features = st.selectbox('Features considered per split', ['sqrt', 'log2'],
+                    index=['sqrt', 'log2'].index(parameters.forest_max_features), key='training_input_features')
+            st.caption('One worker and at most 512 leaves per tree keep memory use bounded.')
+        with right:
+            st.subheader('ANN')
+            neurons = st.number_input('First hidden layer neurons', min_value=8, max_value=64,
+                                       value=parameters.ann_neurons, step=8, key='training_input_neurons')
+            second = st.number_input('Second hidden layer neurons (0 = disabled)', min_value=0, max_value=32,
+                                      value=parameters.ann_second_neurons, step=8, key='training_input_second')
+            epochs = st.number_input('Maximum epochs', min_value=10, max_value=150,
+                                      value=parameters.ann_epochs, step=10, key='training_input_epochs')
+            with st.expander('More ANN settings'):
+                activation = st.selectbox('Activation', ['relu', 'tanh'],
+                    index=['relu', 'tanh'].index(parameters.ann_activation), key='training_input_activation')
+                rate = st.number_input('Learning rate', min_value=0.0001, max_value=0.01,
+                    value=float(parameters.ann_learning_rate), step=0.0001, format='%.4f', key='training_input_rate')
+                batch = st.selectbox('Batch size', [64, 128, 256, 512],
+                    index=[64, 128, 256, 512].index(parameters.ann_batch_size), key='training_input_batch')
+                alpha = st.number_input('Regularization (alpha)', min_value=0.0001, max_value=1.0,
+                    value=float(parameters.ann_alpha), step=0.001, format='%.4f', key='training_input_alpha')
+                patience = st.number_input('Early-stopping patience (epochs)', min_value=3, max_value=20,
+                                            value=parameters.ann_patience, key='training_input_patience')
+            st.caption('Adam optimizer, scaled inputs and validation-based early stopping.')
+        balanced = st.checkbox('Balance default and no-default classes', value=parameters.balance_classes,
+                                key='training_input_balanced', help='Apply training-only class weights to both models.')
+        st.caption('Save settings without training, or train both models directly with the values shown. '
+                   'Applying changed settings clears previous results and predictions.')
+        save = st.form_submit_button('Save training parameters')
+        train = st.form_submit_button('Train ANN and Random Forest', type='primary', width='stretch')
+    if save or train:
+        try:
+            requested = TrainingParameters(forest_trees=trees, forest_depth=depth,
+                forest_min_leaf=min_leaf, forest_min_split=min_split, forest_max_features=max_features,
+                ann_neurons=neurons, ann_second_neurons=second, ann_activation=activation,
+                ann_learning_rate=rate, ann_batch_size=batch, ann_epochs=epochs,
+                ann_patience=patience, ann_alpha=alpha, balance_classes=balanced).validate()
+            changed = apply_training_parameters(requested)
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+        if save:
+            st.session_state.training_notice = 'Parameters saved. Train both models to generate new results.' if changed else 'Parameters saved.'
+            st.rerun()
+        st.session_state.benchmark = None
+        st.session_state.pop('prediction', None)
+        current = st.empty()
+        started = time.perf_counter()
+        def progress(name, detail):
+            current.info(f'{name} · {detail} · elapsed {time.perf_counter() - started:.1f}s')
+        try:
+            with st.spinner('Training both models with your settings…'):
+                st.session_state.benchmark = train_models(frame, progress, parameters=requested)
+            current.empty()
+            st.rerun()
+        except (ValueError, MemoryError, RuntimeError) as exc:
+            current.empty()
+            st.error(f'Training did not complete: {exc}')
     existing = st.session_state.benchmark
-    if existing is None:
-        if st.button('Train ANN and Random Forest', type='primary', width='stretch'):
-            current = st.empty()
-            started = time.perf_counter()
-            def progress(name, detail):
-                current.info(f'{name} · {detail} · elapsed {time.perf_counter() - started:.1f}s')
-            try:
-                with st.spinner('Training the two models. This may take a little time on a shared CPU…'):
-                    st.session_state.benchmark = train_models(frame, progress)
-                current.empty()
-                st.rerun()
-            except (ValueError, MemoryError, RuntimeError) as exc:
-                current.empty()
-                st.error(f'Training did not complete: {exc}')
-    else:
+    if existing is not None:
         st.success(f"Both models are ready. Original training/evaluation time: {existing['elapsed_seconds']:.1f}s. "
                    f"ANN restored epoch {existing['ann_best_epoch']} from {len(existing['ann_history'])} completed epochs.")
         st.button('Compare the results', on_click=go_to, args=('Compare',), type='primary')
-        st.caption('Training is not repeated on navigation or prediction. Clear this session to start a fresh run.')
+        st.caption('Navigation and prediction reuse these models. Submit the training button again only when you want another run.')
     with st.expander('How the comparison stays fair'):
-        st.write('Both models receive the same 24,000-customer development partition and the same untouched 6,000-customer test set. '
-                 'The forest fits all development rows. The ANN divides those rows into 21,600 fit rows and 2,400 validation rows for early stopping; '
-                 'its imputer, encoder and scaler fit only the 21,600 rows. Neither model sees the test data during fitting.')
-        st.write('No oversampling, undersampling or feature selection changes the dataset. Class weighting is learned from training labels. '
-                 'The ANN stops after eight epochs without sufficient validation-loss improvement. '
-                 'The app reports held-out results without using them to declare or tune a winning model.')
+        st.write('Both models share the same 24,000 development records and untouched 6,000 test records across parameter changes. '
+                 'The forest fits all development rows. ANN preprocessing fits only its 21,600 fit rows; '
+                 '2,400 separate validation rows choose its early-stopping checkpoint.')
+        st.write('Class balancing, when enabled, uses training-only weights. No sampling changes the dataset. '
+                 'The test set never chooses parameters, epochs or the 0.50 decision threshold. '
+                 'Repeatedly tuning after viewing test results weakens their independence.')
 
 
 def compare_page():
@@ -170,16 +239,18 @@ def compare_page():
                    'it differs from precision at the 0.50 decision threshold.')
     with st.expander('ANN learning progress'):
         chart(px.line(benchmark['ann_history'], x='epoch', y=['training_loss', 'validation_log_loss'],
-                      labels={'value': 'Weighted loss', 'epoch': 'Epoch'}, title='Training and validation loss'))
+                      labels={'value': 'Loss', 'epoch': 'Epoch'}, title='Training and validation loss'))
         st.caption(f"Checkpoint selected by inner validation loss: epoch {benchmark['ann_best_epoch']}. Test scores never selected this epoch.")
+    with st.expander('Training parameters used for these results'):
+        st.json(benchmark['parameters'])
     st.subheader('Keep your results')
     export = {'dataset': metadata(), 'seed': SEED, 'threshold': 0.5,
               'train_customer_ids': public_dataset(metadata()['bundled_sha256']).ID.iloc[benchmark['train_indices']].tolist(),
               'test_customer_ids': benchmark['test_customer_ids'].tolist(),
               'ann_fit_customer_ids': public_dataset(metadata()['bundled_sha256']).ID.iloc[benchmark['ann_fit_indices']].tolist(),
               'ann_validation_customer_ids': public_dataset(metadata()['bundled_sha256']).ID.iloc[benchmark['ann_stop_indices']].tolist(),
-              'models': {'Random Forest': FOREST_PARAMETERS, 'ANN': ANN_PARAMETERS},
-              'ann_max_epochs': ANN_MAX_EPOCHS, 'ann_patience': ANN_PATIENCE, 'ann_best_epoch': benchmark['ann_best_epoch'],
+              'training_parameters': benchmark['parameters'], 'parameter_fingerprint': benchmark['parameter_fingerprint'],
+              'models': benchmark['effective_parameters'], 'ann_best_epoch': benchmark['ann_best_epoch'],
               'metrics': table.to_dict(orient='records'), 'versions': benchmark['versions'],
               'trained_at_utc': benchmark['trained_at']}
     left, right = st.columns(2)
@@ -239,7 +310,7 @@ def predict_page(frame):
                 st.subheader(name)
                 st.metric('Estimated default probability', f"{value['probability']:.1%}")
                 st.write(f"Prediction at 0.50: **{CLASS_LABELS[value['label']]}**")
-        st.caption('These class-weighted model scores are uncalibrated estimates from historical data, '
+        st.caption('These model scores are uncalibrated estimates from historical data, '
                    'not a current lending recommendation. Editing the profile requires another prediction click.')
 
 
@@ -249,6 +320,12 @@ def main():
     if st.session_state.get('studio_dataset_version') != info['bundled_sha256']:
         st.session_state.clear()
         st.session_state.update(studio_dataset_version=info['bundled_sha256'], benchmark=None, studio_page='Dataset')
+    if 'training_parameters' not in st.session_state:
+        st.session_state.training_parameters = TrainingParameters().to_dict()
+    existing = st.session_state.benchmark
+    if existing is not None and existing.get('parameter_fingerprint') != TrainingParameters(**st.session_state.training_parameters).fingerprint():
+        st.session_state.benchmark = None
+        st.session_state.pop('prediction', None)
     frame = public_dataset(info['bundled_sha256'])
     with st.sidebar:
         st.title('Credit Default Studio')

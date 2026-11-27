@@ -7,7 +7,7 @@ The full UCI **Default of Credit Card Clients** dataset is bundled with the repo
 ## Four pages
 
 1. **Dataset** — understand the question, actual class distribution, feature groups and source; preview the data.
-2. **Train** — one button trains both bounded CPU models. Training only happens on this action; fitted models remain in session state for page changes and prediction.
+2. **Train** — adjust bounded ANN/Random Forest parameters, save them without training, or train both models directly with the values shown. Applying changed parameters clears previous results and predictions.
 3. **Compare** — view metrics, confusion matrices, ROC/precision–recall curves and ANN learning progress; download the comparison CSV and reproducibility JSON.
 4. **Predict** — edit a public example customer, enter six months of repayment history, and obtain predictions from both fitted models.
 
@@ -35,11 +35,23 @@ Both models share a deterministic, stratified **80/20 split** (seed 42):
 | Development / training | 24,000 | Fit the models; includes the ANN's internal validation subset |
 | Held-out test | 6,000 | Evaluate both models after fitting is complete |
 
-**Random Forest:** 80 trees, maximum depth 8, minimum leaf size 15, balanced-subsample class weights, one worker. Categorical predictors are one-hot encoded; numerical values use a training-only median imputer without scaling.
+**Random Forest defaults:** 80 trees, maximum depth 8, minimum leaf size 15, balanced-subsample class weights, one worker. All configurations are limited to 512 leaves per tree. Categorical predictors are one-hot encoded; numerical values use a training-only median imputer without scaling.
 
-**ANN:** one 32-neuron ReLU hidden layer with Adam, batch size 256, learning rate 0.001, alpha 0.01 and balanced training sample weights. It divides the 24,000 development rows into **21,600 fit rows** and **2,400 early-stopping validation rows**. Its imputer, encoder and StandardScaler fit only the 21,600 rows. An explicit epoch loop restores the best validation-loss checkpoint, stopping after eight unimproved epochs, up to 80 epochs. The hidden validation data never fits preprocessing.
+**ANN defaults:** one 32-neuron ReLU hidden layer with Adam, batch size 256, learning rate 0.001, alpha 0.01 and balanced training sample weights. It divides the 24,000 development rows into **21,600 fit rows** and **2,400 early-stopping validation rows**. Its imputer, encoder and StandardScaler fit only the 21,600 rows. An explicit epoch loop restores the best validation-loss checkpoint, stopping after eight unimproved epochs, up to 80 epochs by default. Both limits are configurable. The hidden validation data never fits preprocessing.
 
 Categorical inputs include the demographic and repayment-status codes, preserving unknown/other categories. One-hot encoders safely ignore categories not seen during fitting. Numerical features remain separate. All model computations use a single native thread; the forest also uses `n_jobs=1`.
+
+### Set training parameters in the interface
+
+Open **Train** and adjust:
+
+- **Random Forest:** number of trees (20–200), maximum depth (2–12), minimum samples per leaf/split, and `sqrt`/`log2` feature selection.
+- **ANN:** first hidden layer (8–64 neurons), optional second layer (0 or 8–32 neurons), maximum epochs (10–150), activation (`relu`/`tanh`), learning rate, batch size, alpha regularization, and early-stopping patience.
+- **Both models:** enable or disable class balancing. Numerical scaling, Adam optimization, one CPU worker, the shared 80/20 split and random state 42 remain fixed.
+
+Click **Save training parameters** to commit settings without fitting, or **Train ANN and Random Forest** to submit the shown values and train immediately. Changed saved settings clear old results/predictions; navigating between pages preserves the settings. **Reset parameters to defaults** restores the initial settings and clears old results. Saving unchanged settings keeps their existing models.
+
+The server validates these bounds before fitting. Trained results and the experiment JSON retain a snapshot of the actual settings and effective estimator parameters; editing a draft cannot relabel previous results. The test partition remains the same across parameter changes. Repeated tuning against its reported scores can still compromise an independent evaluation.
 
 The default decision threshold is fixed at **0.50**; test labels never select a threshold, model parameter or ANN epoch. Results include accuracy, balanced accuracy, default-class precision/recall/F1, ROC-AUC and average precision from genuine probability scores. Both models receive the same held-out customers. The majority-class accuracy is an explanatory reference statistic, not a third trained model. The app does not declare or tune a winner from the test scores.
 
@@ -88,7 +100,7 @@ The script checks the pinned source SHA-256 before preparing the gzip CSV and me
 
 ## Interpretation and limitations
 
-This is a historical research comparison, not a current lending decision system. Demographic inputs require bias assessment; behavior and calibration may differ across populations and time. Class weighting changes the probability scale, so displayed probabilities are **uncalibrated model estimates**. A fixed 0.50 threshold is a reproducible benchmark, not a business cost policy.
+This is a historical research comparison, not a current lending decision system. Demographic inputs require bias assessment; behavior and calibration may differ across populations and time. When enabled, class weighting changes the probability scale, so displayed probabilities are **uncalibrated model estimates**. A fixed 0.50 threshold is a reproducible benchmark, not a business cost policy.
 
 One held-out split is not cross-validation or evidence of universal superiority. Repeatedly inspecting and tuning to it weakens its independence; additional temporal/external validation is necessary for confirmatory claims. ANN development validation and RF training allocations are documented separately above. All 30,000 customers contribute to fitting, validation or final evaluation; the final 6,000 never train either model.
 
